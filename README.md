@@ -1,10 +1,5 @@
 # 🏥 GraminSeva - Voice-First Healthcare for Rural Communities
 
-[![Next.js](https://img.shields.io/badge/Next.js-16.0.0-black)](https://nextjs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue)](https://www.typescriptlang.org/)
-[![Twilio](https://img.shields.io/badge/Twilio-Voice-red)](https://www.twilio.com/)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT-green)](https://openai.com/)
-
 GraminSeva is an AI-powered voice healthcare assistant designed to provide maternal and child health guidance to rural communities. Built for accessibility - works on any phone, no app needed.
 
 ## 🌟 Features
