@@ -1,18 +1,18 @@
-# 🏥 GraminSeva - Voice-First Healthcare for Rural Communities
+# GraminSeva - Voice-First Healthcare for Rural Communities
 
 GraminSeva is an AI-powered voice healthcare assistant designed to provide maternal and child health guidance to rural communities. Built for accessibility - works on any phone, no app needed.
 
-## 🌟 Features
+## Features
 
-- **📞 Voice-First Interface** - Call a number, get instant health guidance
-- **🤖 AI-Powered Responses** - OpenAI GPT integration for intelligent conversations
-- **🌐 Multilingual Support** - Understands local languages and dialects
-- **📊 Real-Time Analytics Dashboard** - Track calls, success rates, and user statistics
-- **🧪 Development Mode** - Test locally without Twilio webhooks
-- **🎨 Modern UI** - Crypto-style interface with navy blue theme and glassmorphism effects
-- **♿ Accessible** - No internet required for callers, works on any phone
+- **Voice-First Interface** - Call a number, get instant health guidance
+- **AI-Powered Responses** - OpenAI GPT integration for intelligent conversations
+- **Multilingual Support** - Understands local languages and dialects
+- **Real-Time Analytics Dashboard** - Track calls, success rates, and user statistics
+- **Development Mode** - Test locally without Twilio webhooks
+- **Modern UI** - Crypto-style interface with navy blue theme and glassmorphism effects
+- **Accessible** - No internet required for callers, works on any phone
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -54,7 +54,7 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-## 🧪 Development Mode
+## Development Mode
 
 When running locally with `NEXT_PUBLIC_APP_URL=http://localhost:3000`, the app automatically simulates calls without requiring Twilio webhooks. This lets you:
 
@@ -65,7 +65,7 @@ When running locally with `NEXT_PUBLIC_APP_URL=http://localhost:3000`, the app a
 
 A yellow banner appears at the top indicating development mode.
 
-## 🌐 Production Setup (Real Calls)
+## Production Setup (Real Calls)
 
 For real Twilio voice calls, you need a publicly accessible URL. Two options:
 
@@ -99,7 +99,7 @@ Set environment variables in your hosting dashboard and configure Twilio webhook
 
 See [TWILIO_SETUP.md](./TWILIO_SETUP.md) for detailed instructions.
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 GraminSeva/
@@ -125,14 +125,14 @@ GraminSeva/
 └── TWILIO_SETUP.md        # Detailed setup guide
 ```
 
-## 🎯 Use Cases
+## Use Cases
 
 - **Maternal Health** - Pregnancy guidance, nutrition, prenatal care
 - **Child Health** - Vaccination schedules, nutrition, development milestones
 - **Agriculture** - Climate-smart farming, crop management
 - **Emergency Guidance** - First aid, when to seek medical help
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 - **Frontend**: Next.js 16, React 19, TypeScript
 - **Styling**: Tailwind CSS v4 with custom theme
@@ -141,7 +141,7 @@ GraminSeva/
 - **Analytics**: Real-time statistics with Recharts
 - **Deployment**: Vercel-ready
 
-## 📊 Dashboard Features
+## Dashboard Features
 
 - Total calls and success rate
 - Average call duration
@@ -150,7 +150,7 @@ GraminSeva/
 - Top questions analysis
 - Recent calls list with live updates
 
-## 🧪 Testing
+## Testing
 
 Visit `/test` route to test all API endpoints:
 
@@ -164,14 +164,14 @@ Test buttons for:
 - POST /api/test-call
 - POST /api/initiate-call
 
-## 🔒 Security
+## Security
 
 - Environment variables for sensitive data
 - `.env` excluded from git via `.gitignore`
 - Use `.env.example` as template (no secrets committed)
 - Twilio webhook signature validation (TODO)
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please follow these steps:
 
@@ -181,12 +181,12 @@ Contributions are welcome! Please follow these steps:
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📝 Documentation
+## Documentation
 
 - [TWILIO_SETUP.md](./TWILIO_SETUP.md) - Complete Twilio setup guide
 - [BUTTON_FUNCTIONALITY.md](./BUTTON_FUNCTIONALITY.md) - Feature documentation
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 **Error: "Url is not a valid URL"**
 - Solution: Use ngrok or deploy to production. See [TWILIO_SETUP.md](./TWILIO_SETUP.md)
@@ -201,21 +201,21 @@ Contributions are welcome! Please follow these steps:
 - Verify: `/api/stats` and `/api/calls` endpoints responding
 - Try: Refresh the page
 
-## 📜 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built for Hackathon 2024
 - Designed for rural healthcare accessibility
 - Inspired by the need for voice-first solutions in low-connectivity areas
 
-## 📞 Contact
+## Contact
 
 - GitHub: [@Hacxmr](https://github.com/Hacxmr)
 - Repository: [GraminSeva](https://github.com/Hacxmr/GraminSeva)
 
 ---
 
-Made with ❤️ for communities worldwide
+Made for communities worldwide
