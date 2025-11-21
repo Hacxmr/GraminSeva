@@ -1,0 +1,4 @@
+[dotenv@17.2.3] injecting env (7) from .env -- tip: 🔐 prevent committing .env to code: https://dotenvx.com/precommit
+✅ Maternal Health Backend is running on port 5002
+📍 Healthcare Centers configured: Sardar Hospital, City Medical Center, Rural Health Post
+📞 Twilio is configured and ready
