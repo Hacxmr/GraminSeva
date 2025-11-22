@@ -3,15 +3,54 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
+const cors = require('cors');
 const { OpenAI } = require('openai');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
+
+// Enable CORS for frontend
+app.use(cors({
+  origin: [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
+    process.env.FRONTEND_URL
+  ].filter(Boolean),
+  credentials: true
+}));
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+// Initialize OpenAI and Supabase with error handling
+let openai;
+let supabase = null;
+
+try {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  console.log('✅ OpenAI client initialized');
+} catch (err) {
+  console.error('❌ Failed to initialize OpenAI:', err.message);
+  process.exit(1);
+}
+
+try {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  
+  if (supabaseUrl && supabaseKey && 
+      supabaseUrl.startsWith('http') && 
+      supabaseKey.length > 20) {
+    supabase = createClient(supabaseUrl, supabaseKey);
+    console.log('✅ Supabase client initialized');
+  } else {
+    console.log('⚠️  Supabase not configured - using local file storage for calls/referrals');
+  }
+} catch (err) {
+  console.warn('⚠️  Supabase initialization failed - using local file storage:', err.message);
+  supabase = null;
+}
 
 // Exotel config
 const EXOTEL_SID = process.env.EXOTEL_SID;
@@ -245,9 +284,9 @@ app.post('/api/call', async (req, res) => {
 
     const full_ai_response = `${first_aid_advice} ${hospital_referral}`.trim();
 
-    // Log the call (Supabase in prod, local JSON in DEV_MODE)
+    // Log the call (Supabase in prod, local JSON in DEV_MODE or if Supabase unavailable)
     let logData;
-      if (process.env.DEV_MODE === 'true') {
+      if (!supabase || process.env.DEV_MODE === 'true') {
         logData = await logCallLocal({ user_phone_number: userPhone, user_transcript: message, ai_response: full_ai_response, is_critical: is_critical });
       } else {
         const supRes = await safeSupabaseInsert('call_logs', {
@@ -262,7 +301,7 @@ app.post('/api/call', async (req, res) => {
 
     // If critical, create a referral for the hospital dashboard
     if (is_critical) {
-      if (process.env.DEV_MODE === 'true') {
+      if (!supabase || process.env.DEV_MODE === 'true') {
         await createReferralLocal({ call_id: logData.id, patient_phone: userPhone, symptoms_summary: message, referred_to_hospital: 'Sardar Hospital' });
       } else {
           const supRef = await safeSupabaseInsert('referrals', {
@@ -285,7 +324,7 @@ app.post('/api/call', async (req, res) => {
 // GET /api/calls - Retrieve all call logs
 app.get('/api/calls', async (req, res) => {
   try {
-    if (process.env.DEV_MODE === 'true') {
+    if (!supabase || process.env.DEV_MODE === 'true') {
       const calls = readJsonFile(CALLS_FILE);
       // newest first
       return res.json((calls || []).slice().reverse().slice(0, 50));
@@ -323,7 +362,7 @@ app.get('/api/stats', async (req, res) => {
   try {
     let calls = [];
     let referrals = [];
-    if (process.env.DEV_MODE === 'true') {
+    if (!supabase || process.env.DEV_MODE === 'true') {
       calls = readJsonFile(CALLS_FILE);
       referrals = readJsonFile(REFERRALS_FILE);
     } else {
@@ -346,7 +385,15 @@ app.get('/api/stats', async (req, res) => {
     const totalCalls = calls?.length || 0;
     const criticalCalls = calls?.filter(c => c.is_critical)?.length || 0;
     const successRate = totalCalls > 0 ? ((totalCalls - criticalCalls) / totalCalls) * 100 : 100;
-    const avgDuration = totalCalls > 0 ? (callHistory.reduce((a, b) => a + b, 0) / totalCalls) : 0;
+    
+    // Calculate average duration from conversation lengths
+    const avgDuration = totalCalls > 0 
+      ? calls.reduce((sum, call) => {
+          const conversationLength = (call.user_transcript?.length || 0) + (call.ai_response?.length || 0);
+          return sum + Math.max(30, Math.min(600, conversationLength * 2));
+        }, 0) / totalCalls
+      : 0;
+    
     const uniqueUsers = new Set(calls?.map(c => c.user_phone_number) || []).size;
 
     // Generate call data by hour
@@ -368,13 +415,20 @@ app.get('/api/stats', async (req, res) => {
     ];
 
     // Recent calls
-    const recentCalls = (calls || []).slice(0, 5).map(call => ({
-      phone: call.user_phone_number,
-      topic: call.user_transcript?.substring(0, 40) + '...' || 'Unknown',
-      status: call.is_critical ? 'Critical - Referred' : 'Completed',
-      duration: 120 + Math.floor(Math.random() * 300),
-      timestamp: new Date(call.created_at).toLocaleTimeString(),
-    }));
+    const recentCalls = (calls || []).slice(0, 5).map(call => {
+      // Calculate realistic duration based on conversation length
+      // Assume ~2 seconds per character spoken/listened (reading speed)
+      const conversationLength = (call.user_transcript?.length || 0) + (call.ai_response?.length || 0);
+      const estimatedDuration = Math.max(30, Math.min(600, conversationLength * 2)); // Min 30s, Max 10min
+      
+      return {
+        phone: call.user_phone_number,
+        topic: call.user_transcript?.substring(0, 40) + '...' || 'Unknown',
+        status: call.is_critical ? 'Critical - Referred' : 'Completed',
+        duration: estimatedDuration,
+        timestamp: new Date(call.created_at).toLocaleTimeString(),
+      };
+    });
 
     return res.json({
       totalCalls,
@@ -425,9 +479,9 @@ app.post('/api/voice', async (req, res) => {
     const { is_critical, first_aid_advice, hospital_referral } = aiJsonResponse;
     const full_ai_response = `${first_aid_advice} ${hospital_referral}`.trim();
 
-    // Log the call (Supabase in prod, local JSON in DEV_MODE)
+    // Log the call (Supabase in prod, local JSON in DEV_MODE or if Supabase unavailable)
     let _logData;
-    if (process.env.DEV_MODE === 'true') {
+    if (!supabase || process.env.DEV_MODE === 'true') {
       _logData = await logCallLocal({ user_phone_number: phoneNumber, user_transcript: message, ai_response: full_ai_response, is_critical: is_critical });
     } else {
       const supRes = await safeSupabaseInsert('call_logs', {
@@ -443,7 +497,7 @@ app.post('/api/voice', async (req, res) => {
     // If critical, create referral to nearest healthcare center
     if (is_critical) {
       const nearestCenter = healthcareCenters[Math.floor(Math.random() * healthcareCenters.length)];
-      if (process.env.DEV_MODE === 'true') {
+      if (!supabase || process.env.DEV_MODE === 'true') {
         await createReferralLocal({ call_id: _logData.id, patient_phone: phoneNumber, symptoms_summary: message, referred_to_hospital: nearestCenter.name, hospital_phone: nearestCenter.phone, critical_level: 'Emergency' });
       } else {
         const supRef = await safeSupabaseInsert('referrals', {
@@ -457,8 +511,6 @@ app.post('/api/voice', async (req, res) => {
         if (supRef.error) console.warn('Referral logging error:', supRef.error);
       }
     }
-
-    callHistory.push(120 + Math.floor(Math.random() * 300));
 
     return res.json({ 
       reply: full_ai_response,
@@ -482,7 +534,7 @@ app.post('/api/voice-followup', async (req, res) => {
   try {
     // Retrieve original call for context
     let originalCall;
-    if (process.env.DEV_MODE === 'true') {
+    if (!supabase || process.env.DEV_MODE === 'true') {
       const calls = readJsonFile(CALLS_FILE);
       originalCall = (calls || []).find(c => c.id == callId) || null;
     } else {
@@ -516,7 +568,7 @@ app.post('/api/voice-followup', async (req, res) => {
     const full_ai_response = `${first_aid_advice} ${hospital_referral}`.trim();
 
     // Log the follow-up
-    if (process.env.DEV_MODE === 'true') {
+    if (!supabase || process.env.DEV_MODE === 'true') {
       await logCallLocal({ user_phone_number: phoneNumber, user_transcript: `[FOLLOW-UP] ${message}`, ai_response: full_ai_response, is_critical: is_critical, parent_call_id: callId });
     } else {
       const { error: logError } = await supabase
@@ -570,7 +622,99 @@ app.post('/exotel/voice', async (req, res) => {
   try {
     const from = req.body.From;
     const to = req.body.To;
-    const userTranscript = req.body.SpeechResult || req.body.Digits || '';
+    const speechResult = req.body.SpeechResult || '';
+    const digits = req.body.Digits || '';
+    const callSid = req.body.CallSid || 'unknown';
+    
+    console.log(`📞 Incoming call from ${from} to ${to}`, { speechResult, digits, callSid });
+
+    // Handle DTMF menu selection
+    if (digits && !speechResult) {
+      let menuResponse = '';
+      let healthCondition = '';
+      
+      switch(digits) {
+        case '1':
+          healthCondition = 'Pregnancy concerns (गर्भावस्था संबंधी चिंता)';
+          menuResponse = 'Please describe your pregnancy symptoms or concerns.';
+          break;
+        case '2':
+          healthCondition = 'Child health issue (बच्चे का स्वास्थ्य)';
+          menuResponse = 'Please tell me about the child\'s symptoms.';
+          break;
+        case '3':
+          healthCondition = 'High fever (तेज बुखार)';
+          menuResponse = 'Please describe the fever symptoms - how long and severity.';
+          break;
+        case '4':
+          healthCondition = 'Emergency situation (आपातकाल)';
+          menuResponse = 'This is an emergency. Please describe the situation quickly.';
+          break;
+        case '9':
+          return res.type('application/xml').send(`
+            <Response>
+              <Say language="hi-IN">Dhanyavaad. Swasthya ke liye GraminSeva ko chunne ke liye. Shukriya.</Say>
+              <Say>Thank you for using GraminSeva Health Services. Goodbye.</Say>
+              <Hangup/>
+            </Response>
+          `);
+        default:
+          menuResponse = 'Invalid selection. Please try again.';
+      }
+      
+      // Log menu selection
+      if (digits !== '9' && healthCondition) {
+        const logData = !supabase || process.env.DEV_MODE === 'true'
+          ? await logCallLocal({ user_phone_number: from, user_transcript: `Menu: ${healthCondition}`, ai_response: menuResponse, is_critical: digits === '4' })
+          : (await supabase.from('call_logs').insert({ user_phone_number: from, user_transcript: `Menu: ${healthCondition}`, ai_response: menuResponse, is_critical: digits === '4' }).select().single()).data;
+        
+        console.log(`📋 Menu selection logged: ${healthCondition}`);
+      }
+      
+      return res.type('application/xml').send(`
+        <Response>
+          <Say language="hi-IN">${menuResponse}</Say>
+          <Gather input="speech" action="/exotel/voice" method="POST" timeout="5" language="hi-IN">
+            <Say>Speak now...</Say>
+          </Gather>
+          <Say>No input received. Goodbye.</Say>
+          <Hangup/>
+        </Response>
+      `);
+    }
+
+    // Initial call - present menu if no speech/digits
+    if (!speechResult && !digits) {
+      return res.type('application/xml').send(`
+        <Response>
+          <Say language="hi-IN">Namaste. GraminSeva health assistant mein aapka swagat hai.</Say>
+          <Say>Welcome to GraminSeva Health Assistant.</Say>
+          <Gather numDigits="1" action="/exotel/voice" method="POST" timeout="10">
+            <Say language="hi-IN">
+              Kripya apni samasya ke liye ek option chunein.
+              Garbhavastha ke liye 1 dabaayein.
+              Bacche ki sehat ke liye 2 dabaayein.
+              Bukhar ke liye 3 dabaayein.
+              Aapatkaaleen sthiti ke liye 4 dabaayein.
+              Call khatam karne ke liye 9 dabaayein.
+            </Say>
+            <Say>
+              Press 1 for pregnancy concerns.
+              Press 2 for child health.
+              Press 3 for fever.
+              Press 4 for emergency.
+              Press 9 to end call.
+            </Say>
+          </Gather>
+          <Say>No input received. Goodbye.</Say>
+          <Hangup/>
+        </Response>
+      `);
+    }
+
+    // Process speech input with AI
+    const userTranscript = speechResult;
+    console.log(`🗣️ Speech input: "${userTranscript}"`);
 
     // Call AI to analyze the spoken transcription
     let completion;
@@ -609,10 +753,12 @@ app.post('/exotel/voice', async (req, res) => {
     const replyText = `${first_aid_advice} ${hospital_referral || ''}`.trim();
     const lang = detectLanguage(userTranscript);
 
-    // Log the call (Supabase in prod, local JSON in DEV_MODE)
+    console.log(`🤖 AI Response (critical: ${is_critical}): "${replyText.substring(0, 100)}..."`);
+
+    // Log the call (Supabase in prod, local JSON in DEV_MODE or if Supabase unavailable)
     try {
       let logData;
-      if (process.env.DEV_MODE === 'true') {
+      if (!supabase || process.env.DEV_MODE === 'true') {
         logData = await logCallLocal({ user_phone_number: from, user_transcript: userTranscript, ai_response: replyText, is_critical: !!is_critical });
       } else {
         const { data: _logData, error: _logErr } = await supabase
@@ -624,11 +770,13 @@ app.post('/exotel/voice', async (req, res) => {
         logData = _logData;
       }
 
+      console.log(`💾 Call logged to database (ID: ${logData?.id})`);
+
       // If critical, create referral and attempt to transfer
       if (is_critical) {
         const nearestCenter = healthcareCenters[Math.floor(Math.random() * healthcareCenters.length)];
         try {
-          if (process.env.DEV_MODE === 'true') {
+          if (!supabase || process.env.DEV_MODE === 'true') {
             await createReferralLocal({ call_id: logData?.id || null, patient_phone: from, symptoms_summary: userTranscript, referred_to_hospital: nearestCenter.name, hospital_phone: nearestCenter.phone, critical_level: 'Emergency' });
           } else {
             const { error: referralErr } = await supabase.from('referrals').insert({
@@ -641,6 +789,7 @@ app.post('/exotel/voice', async (req, res) => {
             });
             if (referralErr) console.warn('Referral logging error (exotel):', referralErr);
           }
+          console.log(`🏥 Referral created: ${nearestCenter.name}`);
         } catch (e) {
           console.warn('Referral insert failed (exotel):', e && e.stack ? e.stack : e);
         }
@@ -648,8 +797,11 @@ app.post('/exotel/voice', async (req, res) => {
         // Respond with Exotel XML to transfer call
         return res.type('application/xml').send(`
           <Response>
-            <Say>${first_aid_advice}</Say>
+            <Say language="hi-IN">${first_aid_advice}</Say>
+            <Say language="hi-IN">Aapko ${nearestCenter.name} se connect kar rahe hain. Kripya prateeksha karein.</Say>
+            <Say>Connecting you to ${nearestCenter.name}. Please wait.</Say>
             <Dial>${nearestCenter.phone}</Dial>
+            <Say>Unable to connect. Please call ${nearestCenter.phone} directly.</Say>
           </Response>
         `);
       }
@@ -657,10 +809,14 @@ app.post('/exotel/voice', async (req, res) => {
       // Non-critical: respond with advice and offer to gather more information
       return res.type('application/xml').send(`
         <Response>
-          <Say>${replyText}</Say>
-          <Gather input="speech" action="/exotel/voice" method="POST" timeout="3">
-            <Say>${lang === 'hi' ? 'Kya aur madad chahiye? Aap apna sawaal dobara bol sakte hain.' : 'Do you need more help? You can say your question again.'}</Say>
+          <Say language="hi-IN">${replyText}</Say>
+          <Gather input="speech dtmf" numDigits="1" action="/exotel/voice" method="POST" timeout="5" language="hi-IN">
+            <Say language="hi-IN">Kya aur madad chahiye? Haan ke liye 1 dabaayein, nahi ke liye 9 dabaayein. Ya aap apna sawaal bol sakte hain.</Say>
+            <Say>Need more help? Press 1 for yes, 9 for no. Or speak your question.</Say>
           </Gather>
+          <Say language="hi-IN">Dhanyavaad. Swasthya ke liye GraminSeva ko yaad rakhein.</Say>
+          <Say>Thank you for using GraminSeva Health Services.</Say>
+          <Hangup/>
         </Response>
       `);
     } catch (logErr) {
@@ -692,9 +848,70 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// DELETE /api/calls/clear - Clear all test data (use with caution)
+app.delete('/api/calls/clear', async (req, res) => {
+  try {
+    if (!supabase) {
+      // Clear local files
+      writeJsonFile(CALLS_FILE, []);
+      writeJsonFile(REFERRALS_FILE, []);
+      console.log('🗑️ Cleared local test data');
+      return res.json({ message: 'Local test data cleared', count: 0 });
+    }
+
+    // Delete all calls from Supabase
+    const { error: callsError, count: callsCount } = await supabase
+      .from('call_logs')
+      .delete()
+      .neq('id', 0); // Delete all rows (neq 0 matches all)
+    
+    if (callsError) throw callsError;
+
+    // Delete all referrals
+    const { error: referralsError } = await supabase
+      .from('referrals')
+      .delete()
+      .neq('id', 0);
+    
+    if (referralsError) console.warn('Referrals delete warning:', referralsError);
+
+    console.log('🗑️ Cleared all test data from Supabase');
+    res.json({ message: 'All test data cleared successfully', count: callsCount || 0 });
+  } catch (error) {
+    console.error('Error clearing data:', error);
+    res.status(500).json({ error: 'Failed to clear data' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => {
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION! Shutting down...');
+  console.error(err.name, err.message);
+  console.error(err.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('💥 UNHANDLED REJECTION! Shutting down...');
+  console.error(err);
+  process.exit(1);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ GraminSeva Backend (Exotel) running on port ${PORT}`);
   console.log(`📍 Healthcare Centers configured: ${healthcareCenters.map(c => c.name).join(', ')}`);
+  console.log(`🌐 Server listening on http://0.0.0.0:${PORT}`);
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use!`);
+  } else {
+    console.error('❌ Server error:', err);
+  }
+  process.exit(1);
 });
+
+// Keep the process alive
+console.log('🔄 Backend server is running. Press Ctrl+C to stop.');
