@@ -12,11 +12,12 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.81.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "openai": "^6.9.0",
-    "twilio": "^5.10.5"
+    "twilio": "^5.10.6"
   }
 }

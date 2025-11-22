@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        Namaste! GraminSeva mein aapka swagat hai.
+    </Say>
+    <Pause length="1"/>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        Swasthya salah: Rozana vyayam karein, santulit bhojan karein, paryapt paani piyein. 
+        Bukhar hone par aaram karein aur doctor se sampark karein. 
+        Pet dard hone par halka bhojan lein. 
+        Kamzori mehsoos ho toh poshtik aahar lein. 
+        Agar lakshan do din se zyada rahein toh turant doctor se milein. 
+        Swasth rahein, dhanyavaad!
+    </Say>
+    <Hangup/>
+</Response>

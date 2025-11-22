@@ -4,8 +4,9 @@ const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const { OpenAI } = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { createClient } = require('@supabase/supabase-js');
+const twilio = require('twilio');
 
 const app = express();
 
@@ -23,15 +24,32 @@ app.use(cors({
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-// Initialize OpenAI and Supabase with error handling
-let openai;
+// Request logging middleware
+app.use((req, res, next) => {
+  // Log all incoming requests for debugging
+  console.log(`📨 ${req.method} ${req.path}`, {
+    userAgent: req.headers['user-agent']?.substring(0, 50),
+    from: req.body?.From || req.query?.From,
+    callSid: req.body?.CallSid || req.query?.CallSid
+  });
+  next();
+});
+
+// Initialize Google AI and Supabase with error handling
+let genAI;
+let model;
 let supabase = null;
 
 try {
-  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  console.log('✅ OpenAI client initialized');
+  const apiKey = process.env.GOOGLE_AI_API_KEY || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('No API key found. Set GOOGLE_AI_API_KEY in .env');
+  }
+  genAI = new GoogleGenerativeAI(apiKey);
+  model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  console.log('✅ Google AI (Gemini) client initialized');
 } catch (err) {
-  console.error('❌ Failed to initialize OpenAI:', err.message);
+  console.error('❌ Failed to initialize Google AI:', err.message);
   process.exit(1);
 }
 
@@ -52,13 +70,19 @@ try {
   supabase = null;
 }
 
-// Exotel config
-const EXOTEL_SID = process.env.EXOTEL_SID;
-const EXOTEL_API_KEY = process.env.EXOTEL_API_KEY;
-const EXOTEL_API_TOKEN = process.env.EXOTEL_API_TOKEN;
-const EXOTEL_SUBDOMAIN = process.env.EXOTEL_SUBDOMAIN || 'api.exotel.com';
+// Twilio config
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const CALL_SERVICE = process.env.CALL_SERVICE || 'twilio'; // Default to Twilio
 
-// Base URL used by Exotel callbacks / generated links
+// Initialize Twilio client if credentials exist
+let twilioClient = null;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+  twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+  console.log('✅ Twilio client initialized');
+}
+
 const BACKEND_BASE = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5001}`;
 
 // Parse healthcare centers from env
@@ -133,13 +157,76 @@ const analyzeSymptomsLocally = (text) => {
   const isCritical = criticalKeywords.some(k => lower.includes(k));
   let firstAid = 'Keep the patient calm and seek medical attention if symptoms worsen.';
   let hospitalReferral = '';
+  
   if (isCritical) {
     firstAid = 'Lay the mother on her left side and call for immediate medical help.';
     hospitalReferral = 'Aapko turant Sardar Hospital jaana chahiye!';
   } else {
-    // non-critical heuristics
-    if (lower.includes('fever') || lower.includes('bukhar')) firstAid = 'Keep the child warm and offer fluids; consult a doctor if fever persists.';
-    if (lower.includes('khansi') || lower.includes('cough')) firstAid = 'Keep the child comfortable; if cough worsens seek medical care.';
+    // Handle vaccination questions
+    if (lower.includes('vaccin') || lower.includes('tikakaran') || lower.includes('immuniz')) {
+      firstAid = 'Vaccination Schedule (0-2 years): Birth - BCG, OPV-0, Hepatitis B; 6 weeks - DTaP, IPV, Hib, PCV; 10 weeks - DTaP-2, IPV-2, Hib-2, PCV-2; 14 weeks - DTaP-3, IPV-3, Hib-3, PCV-3; 9 months - Measles-1; 12 months - Hepatitis A; 15 months - MMR, PCV booster; 18 months - DTaP booster. Visit nearest health center for complete schedule.';
+    }
+    // Handle pregnancy nutrition - improved detection
+    else if ((lower.includes('pregnan') || lower.includes('garbh') || lower.includes('mein')) && (lower.includes('khana') || lower.includes('kya') || lower.includes('chahiye') || lower.includes('eat') || lower.includes('food') || lower.includes('diet') || lower.includes('nutrition'))) {
+      firstAid = 'Garbhavastha mein nutritious khana bahut zaroori hai. Protein ke liye daal, eggs aur doodh lein. Hara saag (palak, methi), phal, aur sabziyan khayein. Iron-rich foods jaise palak aur chana lein. Folic acid ke liye hare patte wali sabzi. Din mein 3-4 baar thoda-thoda khaana behtar hai. Paani aur juice bharpur matra mein piyein (8-10 glass daily).';
+    }
+    // Handle fever - CHECK WHO IS AFFECTED
+    else if (lower.includes('fever') || lower.includes('bukhar')) {
+      // Check if it's for an adult or child
+      const isAdult = lower.includes('mujhe') || lower.includes('mere ko') || lower.includes('mai') || lower.includes('meri patni') || lower.includes('pati');
+      const isChild = lower.includes('bacche') || lower.includes('baccha') || lower.includes('child') || lower.includes('baby');
+      
+      if (isAdult && !isChild) {
+        // Adult fever - feminine language
+        firstAid = 'Main aapki madad kar rahi hoon. Aapko fever hai - yeh upchar lein: 1) Complete bed rest karein, 2) Garm paani, ginger tea, tulsi water din mein 10-12 glass piyein, 3) Agar temperature 100°F se zyada ho to paracetamol 500mg tablet le sakte hain (har 6 ghante mein), 4) Subah-shaam steam inhalation (bhap) lein, 5) Light aur nutritious khana khayein. Main bata rahi hoon - agar fever 3 din mein kam na ho ya 103°F se zyada ho to doctor se zaroor milein.';
+      } else if (isChild) {
+        // Child fever
+        firstAid = 'Bacche ko garm kapde pehnaayein aur aaram karwayein. Bharpur matra mein paani, juice ya ORS solution pilayein. Bukhar 100.4°F se zyada ho to paracetamol syrup (weight ke anusar) de sakte hain. Bukhar 2 din se zyada rahe ya 103°F se zyada ho to doctor se zaroor milein.';
+      } else {
+        // Generic/unclear - assume adult
+        firstAid = 'Fever ke liye: Aaram karein, bharpur paani piyein (10-12 glass daily), garm fluids lein. Agar fever 100°F+ ho to paracetamol le sakte hain. Steam inhalation helpful hai. 3 din mein better na ho to doctor se milein.';
+      }
+    }
+    // Handle cough - CHECK WHO IS AFFECTED
+    else if (lower.includes('khansi') || lower.includes('cough')) {
+      const isAdult = lower.includes('mujhe') || lower.includes('mere ko') || lower.includes('mai') || lower.includes('meri patni') || lower.includes('pati');
+      const isChild = lower.includes('bacche') || lower.includes('baccha') || lower.includes('child') || lower.includes('baby');
+      
+      if (isAdult && !isChild) {
+        // Adult cough - feminine language
+        firstAid = 'Main aapko cough ka ilaj bata rahi hoon: 1) Garm paani mein namak daal kar garara karein (din mein 3-4 baar), 2) Ginger tea, tulsi water, shahad wala doodh piyein, 3) Steam inhalation din mein 2-3 baar zaroor lein, 4) Cough syrup ya honey le sakte hain, 5) Dhuaan aur thandi cheezon se bachein. Main salah de rahi hoon - agar cough 2 hafte se zyada rahe, khoon aaye, ya saans lene mein takleef ho to turant doctor se milein.';
+      } else if (isChild) {
+        // Child cough
+        firstAid = 'Bacche ko garm paani pilayein aur bhap (steam) le sakti hai. Honey (1 year se bade bacchon ke liye) rahat de sakta hai. Khansi 1 hafte se zyada rahe ya saans lene mein takleef ho to doctor se milein.';
+      } else {
+        // Generic
+        firstAid = 'Cough ke liye: Garm paani se garara karein, steam lein, ginger tea piyein. Honey helpful hai. Agar 2 hafte se zyada rahe to doctor se milein.';
+      }
+    }
+    // Handle fever AND cough together - ADULT SPECIFIC
+    else if ((lower.includes('fever') && lower.includes('cough')) || (lower.includes('bukhar') && lower.includes('khansi'))) {
+      const isAdult = lower.includes('mujhe') || lower.includes('mere ko') || lower.includes('mai') || !lower.includes('bacch');
+      
+      if (isAdult) {
+        firstAid = 'Main aapko fever aur cough ke liye pura ilaj bata rahi hoon: 1) Complete rest zaroor karein, kaam se chhuti lein, 2) Din mein 10-12 glass garm paani, ginger tea, tulsi water piyein, 3) Paracetamol 500mg tablet agar fever 100°F+ ho (har 6 ghante mein max 3-4 tablets daily), 4) Steam inhalation subah-shaam (garam paani mein eucalyptus oil optional), 5) Garam paani se garara 3-4 baar daily, 6) Vitamin C wale fruits (orange, mosambi) khayein, 7) Light khana khayein - soup, khichdi, daal. Main salah de rahi hoon - agar 3 din mein better na ho, fever 103°F se zyada ho, ya breathing problem ho to turant doctor se milein.';
+      } else {
+        firstAid = 'Bacche ko fever aur cough hai: Aaram karwayein, garm kapde, bharpur fluids (paani, juice, soup), paracetamol syrup agar fever 100.4°F+, steam therapy, honey (1 year+). 2-3 din mein better na ho to doctor se milein.';
+      }
+    }
+    // Handle agriculture/farming queries
+    else if (lower.includes('kheti') || lower.includes('fasal') || lower.includes('crop') || lower.includes('farming') || lower.includes('agriculture') || lower.includes('kisan') || lower.includes('farmer') || lower.includes('mausam') || lower.includes('weather') || lower.includes('barish') || lower.includes('rain')) {
+      if (lower.includes('mausam') || lower.includes('weather') || lower.includes('barish') || lower.includes('rain')) {
+        firstAid = 'Mausam ki jaankari: Climate-resilient practices apnayein. Barish ke season mein drainage ka dhyan rakhein. Sukhe ke dauran mulching aur drip irrigation ka upyog karein. Weather forecast ke liye local agriculture office se sampark karein ya mobile apps jaise Meghdoot, Kisan Suvidha use karein.';
+      } else if (lower.includes('beej') || lower.includes('seed')) {
+        firstAid = 'Beej chunaav: High-quality certified seeds ka upyog karein. Apne kshetra ke liye suitable climate-resistant varieties chunein. Seeds ko fungicide se treat karein. Government schemes ke through subsidized seeds mil sakte hain - apne najdeeki Krishi Vigyan Kendra se sampark karein.';
+      } else if (lower.includes('khaad') || lower.includes('fertilizer') || lower.includes('khad')) {
+        firstAid = 'Khaad prabandhan: Organic khad (compost, vermicompost) ka upyog karein. Soil testing karwayein to sahi matra mein fertilizer ka prayog ho. Nitrogen, Phosphorus, Potassium ki balanced quantity use karein. Neem cake natural pest control ke liye helpful hai.';
+      } else if (lower.includes('keede') || lower.includes('pest') || lower.includes('disease') || lower.includes('bimari')) {
+        firstAid = 'Keet evam rog niyantran: Integrated Pest Management (IPM) apnayein. Neem oil, garlic spray jaise organic solutions use karein. Crop rotation practice karein. Healthy soil healthy plants banati hai. Serious infestation ke liye local agriculture extension officer se salah lein.';
+      } else {
+        firstAid = 'Kheti evam krishi salah: Smart farming practices apnayein - crop rotation, soil health management, water conservation. Climate-resilient varieties ka upyog karein. Government ki PM-KISAN, Kisan Credit Card jaise schemes ka labh uthayein. Technical guidance ke liye Krishi Vigyan Kendra (KVK) se sampark karein. Fasal bima zaroor karwayein. Mobile apps: Kisan Suvidha, mKisan, Crop Insurance app use kar sakte hain.';
+      }
+    }
   }
   return { is_critical: !!isCritical, first_aid_advice: firstAid, hospital_referral: hospitalReferral };
 };
@@ -151,15 +238,28 @@ const callAI = async (message, options = {}) => {
     return { choices: [{ message: { content: JSON.stringify(result) } }] };
   }
 
-  // Otherwise, call OpenAI as before
-  return await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    ...(options.response_format ? { response_format: options.response_format } : {}),
-    messages: options.messages || [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: message },
-    ],
-  });
+  // Use Google Gemini AI
+  try {
+    const prompt = options.messages 
+      ? options.messages.map(m => `${m.role}: ${m.content}`).join('\n\n')
+      : `${systemPrompt}\n\nUser: ${message}\n\nAssistant (respond ONLY with valid JSON):`;
+    
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+    
+    // Return in OpenAI-compatible format
+    return {
+      choices: [{
+        message: {
+          content: text
+        }
+      }]
+    };
+  } catch (error) {
+    console.error('Google AI error:', error.message);
+    throw error;
+  }
 };
 
 const logCallLocal = async (entry) => {
@@ -211,17 +311,76 @@ app.get('/health', async (req, res) => {
 
 // THIS IS THE MOST IMPORTANT PART OF THE PROJECT
 const systemPrompt = `
-You are "Asha AI," a specialized AI assistant for maternal and child health emergencies in rural India.
-Your primary mission is to provide SAFE first-aid guidance and immediately direct users to a hospital in critical situations.
+You are "Asha AI," a FEMALE AI assistant for rural India, providing support for:
+1. Maternal and Child Health - Pregnancy care, child health, nutrition, first-aid
+2. Agriculture & Farming - Smart farming guidance, crop health, climate-resilient practices
+
+IMPORTANT: You are a FEMALE assistant. Use FEMININE language in Hindi:
+- Use "मैं आपकी मदद करूंगी" (I will help you - feminine) NOT "करूंगा" (masculine)
+- Use "मैं बता रही हूं" (I am telling - feminine) NOT "बता रहा हूं" (masculine)
+- Use feminine verb endings: करूंगी, बताऊंगी, दूंगी, समझाऊंगी
+
+Your primary mission is to provide SAFE, PRACTICAL, and CONTEXTUALLY RELEVANT guidance.
 YOU ARE NOT A DOCTOR. YOU MUST NEVER SUGGEST OR PRESCRIBE SPECIFIC MEDICINES.
 
-Follow these rules STRICTLY:
-1.  Analyze the user's description of the mother's or child's symptoms.
-2.  Identify if the situation is critical. Critical keywords include: "tez bukhar" (high fever) in a newborn, "khoon behna" (bleeding) during pregnancy, "saans lene me takleef" (breathing difficulty), "behosh" (unconscious), "jhatke aana" (seizures).
-3.  Your response MUST be a JSON object, and nothing else. The JSON object must have three keys:
-    - "is_critical": A boolean (true or false). Set to true if any critical keywords are found.
-    - "first_aid_advice": A very short, safe, universally accepted first-aid tip. Examples: "Maa ko unke baayin taraf litayein." (Lay the mother on her left side.), "Bacche ko garm rakhein." (Keep the child warm.). If not critical, this can be general advice like "Doctor se salah lena zaroori hai."
-    - "hospital_referral": If "is_critical" is true, this MUST say "Aapko turant Sardar Hospital jaana chahiye!". If false, it should be an empty string "".
+CRITICAL INSTRUCTIONS:
+1. READ THE USER'S QUESTION CAREFULLY - Understand WHO is affected:
+   - "Mujhe" (I have/I am) = ADULT asking for themselves
+   - "Mere bacche ko" (My child has) = CHILD health issue
+   - "Meri patni" (My wife) = ADULT WOMAN/PREGNANT WOMAN
+   - "Mera pati" (My husband) = ADULT MAN
+   - If no subject mentioned but symptoms given = assume ADULT asking for themselves
+   
+   EXAMPLE:
+   "Mujhe fever hai" = Adult with fever → Give ADULT-specific advice
+   "Bacche ko fever hai" = Child with fever → Give CHILD-specific advice
+
+2. Identify if the situation is CRITICAL (for health only):
+   Critical keywords: "tez bukhar" (high fever >103°F), "khoon behna" (bleeding) during pregnancy, "saans lene me takleef" (breathing difficulty), "behosh" (unconscious), "jhatke aana" (seizures), "bahut dard" (severe pain)
+   
+3. Provide SPECIFIC advice based on:
+   - Who is affected (adult, pregnant woman, child, infant)
+   - Severity of symptoms (mild, moderate, severe)
+   - Duration (new symptoms vs ongoing)
+
+4. Your response MUST be a JSON object with three keys:
+   - "is_critical": boolean (true for emergencies requiring immediate hospital visit)
+   - "first_aid_advice": SPECIFIC advice for the person and symptoms mentioned. Include:
+     * Immediate home care steps
+     * What to monitor
+     * When to seek medical help
+     * Specific remedies (only safe ones like hydration, rest, steam)
+   - "hospital_referral": If "is_critical" is true, say "Aapko turant Sardar Hospital jaana chahiye!" If false, leave empty ""
+
+RESPONSE GUIDELINES:
+- For adults with fever/cough: Rest, fluids, monitor temperature, paracetamol if needed
+- For children: More caution, specific age-appropriate advice, earlier doctor consultation
+- For pregnant women: Extra care, avoid medications without doctor, immediate attention for severe symptoms
+- For agriculture: Practical, season-appropriate advice
+
+Example Input: "Pregnancy mein kya khana chahiye?"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Garbhavastha mein nutritious khana bahut zaroori hai. Protein ke liye daal, eggs aur doodh lein. Hara saag, phal, aur sabziyan khayein. Iron-rich foods jaise palak aur chana lein. Din mein 3-4 baar thoda-thoda khaana behtar hai. Paani aur juice bharpur matra mein piyein.",
+  "hospital_referral": ""
+}
+
+Example Input: "Mujhe fever aur cough hai"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Aapko fever aur cough hai - yeh adult ke liye upay hain: 1) Pura aaram karein aur kaam se break lein, 2) Din mein kam se kam 10-12 glass garm paani, ginger tea, ya tulsi water piyein, 3) Agar temperature 100°F se zyada hai to paracetamol 500mg tablet le sakte hain (har 6 ghante mein, doctor ki salah ke saath), 4) Subah-shaam bhap (steam inhalation) lein - garam paani mein eucalyptus oil daal sakte hain, 5) Garam paani mein namak daal kar garara karein (din mein 3-4 baar), 6) Vitamin C wale juice (orange, mosambi) piyein. Agar 3 din mein fever kam na ho, 103°F se zyada ho, ya saans lene mein taklif ho to doctor se zaroor milein.",
+  "hospital_referral": ""
+}
+
+Example Input: "mujhe fever aur cough hai" (lowercase)
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Aapko fever aur cough hai - adult ke liye upchar: 1) Complete bed rest, 2) Garm paani aur fluids 10-12 glass daily, 3) Paracetamol 500mg agar fever 100°F+ ho, 4) Steam inhalation morning-evening, 5) Saltwater gargling 3-4 times, 6) Vitamin C intake. Doctor se milein agar 3 din mein better na ho.",
+  "hospital_referral": ""
+}
 
 Example Input: "Meri patni garbhvati hai aur bahut khoon beh raha hai"
 Example Output:
@@ -235,10 +394,43 @@ Example Input: "Mere bacche ko halki khansi hai"
 Example Output:
 {
   "is_critical": false,
-  "first_aid_advice": "Bacche ko garm rakhein aur dher saara तरल पदार्थ pilayein. Doctor se salah lena zaroori hai.",
+  "first_aid_advice": "Bacche ki halki khansi ke liye: 1) Bacche ko garm rakhein, 2) Garm paani ya juice pilayein (umr ke anusar), 3) Bhap (steam) lein din mein 2 baar - bathroom mein garm paani chala kar steam lein, 4) Agar 6 mahine se bada hai to shahad (1 choti chammach) de sakte hain, 5) Sar ke neeche takiya rakhein so ki saans lene mein aasani ho. Agar 3 din mein sudhar na ho, tez bukhar aaye, ya saans lene mein dikkat ho to turant doctor se milein.",
+  "hospital_referral": ""
+}
+
+Example Input: "Mera 2 saal ka baccha bukhar mein hai"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "2 saal ke bacche mein bukhar: 1) Temperature check karein (100.4°F se zyada ho to paracetamol syrup de sakte hain - weight ke anusar dose), 2) Halke kapde pehnayen, 3) Room temperature paani se sponging karein (thande paani se nahi), 4) Bharpur liquid pilayein (paani, ORS, juice), 5) Temperature har 2 ghante mein check karein. Agar bukhar 102°F se zyada ho, 2 din se zyada rahe, baccha lethargic ho, ya khana-peena band kar de to doctor se milein.",
+  "hospital_referral": ""
+}
+
+Example Input: "Bacche ko pet dard hai" OR "A child has stomach pain"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Bacche ko pet dard ke liye: 1) Bacche ko aaram se litayein aur pet par halka pressure daalein, 2) Garam paani ki bottle pet par rakhein (bahut garam nahi), 3) Kuch bhi heavy na khilayein - sirf halka khana jaise khichdi, dalia, ya banana, 4) ORS solution ya paani pilayein, 5) Agar gas ho to pet ko halke haath se clockwise direction mein massage karein, 6) Avoid oily, spicy, ya junk food. Agar dard bahut tez ho, vomiting bhi ho, fever aaye, ya 2-3 ghante mein kam na ho to doctor se zaroor milein. Agar appendicitis ke lakshan hon (dard neeche right side mein) to turant hospital jaayein.",
+  "hospital_referral": ""
+}
+
+Example Input: "Meri fasal mein keede lag gaye hain"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Keet niyantran ke liye pehle organic solutions try karein - neem oil spray (10ml neem oil per liter paani mein), garlic spray ya chilli spray. Integrated Pest Management (IPM) apnayein. Yellow sticky traps lagayein. Agar problem serious ho to apne najdeeki Krishi Vigyan Kendra se salah lein. Chemical pesticides sirf last option ke taur par use karein.",
+  "hospital_referral": ""
+}
+
+Example Input: "Barish ke season mein konsi fasal ugayein"
+Example Output:
+{
+  "is_critical": false,
+  "first_aid_advice": "Kharif season (June-October) ke liye: Dhan (rice), maize, bajra, jowar, soybean, cotton best options hain. Apne kshetra ki soil type aur rainfall pattern ke anusar selection karein. Climate-resilient varieties chunein. Soil testing karwayein sahi crop selection ke liye. Government ke through beej subsidy schemes available hain - PM Kisan Samman Nidhi ke benefits zaroor lein.",
   "hospital_referral": ""
 }
 `;
+
 
 app.post('/api/call', async (req, res) => {
   const { message, userPhone } = req.body;
@@ -454,28 +646,28 @@ app.post('/api/voice', async (req, res) => {
     return res.status(400).json({ error: 'Message and phoneNumber are required' });
   }
 
+  console.log('📞 Voice API called with message:', message);
+
   try {
     // Call AI with maternal health system prompt
     let completion;
     try {
+      console.log('🤖 Calling OpenAI API...');
       completion = await callAI(message, { response_format: { type: 'json_object' } });
+      console.log('✅ OpenAI response received');
     } catch (err) {
       const msg = err && (err.message || err.toString()) || '';
-      console.warn('OpenAI call failed (fallback):', msg);
-      if ((err && (err.status === 429 || err.statusCode === 429)) || /quota|429|rate limit/i.test(msg)) {
-        const lang = detectLanguage(message);
-        const fallbackText = lang === 'hi'
-          ? 'Agar lakshan bigadte hain to turant chikitsak se sampark karein. Kripya kareeb ke swasthya kendra ya aspataal mein jayein.'
-          : 'Please seek medical attention if symptoms worsen. Visit the nearest health center or call for help.';
-        completion = {
-          choices: [{ message: { content: JSON.stringify({ is_critical: false, first_aid_advice: fallbackText, hospital_referral: '' }) } }]
-        };
-      } else {
-        throw err;
-      }
+      console.warn('⚠️ OpenAI call failed, using local analyzer fallback:', msg);
+      // Use local analyzer as fallback for all errors
+      const localResult = analyzeSymptomsLocally(message || '');
+      completion = {
+        choices: [{ message: { content: JSON.stringify(localResult) } }]
+      };
+      console.log('🔧 Using local analyzer result:', localResult);
     }
 
     const aiJsonResponse = JSON.parse(completion.choices[0].message.content);
+    console.log('📝 AI Response:', aiJsonResponse);
     const { is_critical, first_aid_advice, hospital_referral } = aiJsonResponse;
     const full_ai_response = `${first_aid_advice} ${hospital_referral}`.trim();
 
@@ -602,243 +794,486 @@ app.post('/api/initiate-call', async (req, res) => {
   }
 
   try {
-    // Use Exotel API to initiate call
-    // Replace 'from' with a valid Exotel virtual number or your Exophone
-    const from = process.env.EXOTEL_API_KEY; // Or set a specific Exophone number
-    const to = phoneNumber;
-    const call = await makeExotelCall(from, to);
+    // Use Twilio if configured and selected
+    if (CALL_SERVICE === 'twilio' && twilioClient && TWILIO_PHONE_NUMBER) {
+      console.log(`📞 Using Twilio to call ${phoneNumber}`);
+      return await makeTwilioCall(phoneNumber, res);
+    }
+    
+    // Twilio is required
+    if (!twilioClient || !TWILIO_PHONE_NUMBER) {
+      console.log(`📞 Development Mode: Call simulation for ${phoneNumber}`);
+      return res.json({ 
+        message: 'Call simulation successful',
+        isDevelopment: true,
+        phoneNumber: phoneNumber,
+        note: 'Configure Twilio credentials to enable real calls. Get free Twilio trial at https://www.twilio.com/try-twilio'
+      });
+    }
+
+    console.log(`✅ Using Twilio for calls`);
     return res.json({ 
-      message: 'Call initiated',
-      exotelResponse: call.data,
+      message: 'Call initiated successfully',
+      isDevelopment: false,
+      phoneNumber: phoneNumber,
+      callSid: call.data?.Call?.Sid || call.data?.Sid || 'N/A',
+      status: call.data?.Call?.Status || call.data?.Status || 'initiated'
     });
   } catch (error) {
-    console.error("Initiate call error:", error);
-    return res.status(500).json({ error: error.message || 'Failed to initiate call' });
+    console.error("❌ Initiate call error:", error.message);
+    console.error("Error details:", error.response?.data || error);
+    
+    if (error.response) {
+      const errorData = error.response.data;
+      console.error('API Error Response:', JSON.stringify(errorData, null, 2));
+      
+      let userMessage = 'Failed to initiate call';
+      
+      if (error.response.status === 401) {
+        userMessage = 'Authentication failed. Please verify your API credentials.';
+      } else if (error.response.status === 403) {
+        userMessage = 'Access forbidden. Account may need verification.';
+        // Fall back to simulation mode for 403
+        return res.json({ 
+          message: 'Call simulation (API access restricted)',
+          isDevelopment: true,
+          phoneNumber: phoneNumber,
+          note: 'API access is restricted. Using simulation mode. Try Twilio as an alternative: https://www.twilio.com/try-twilio'
+        });
+      } else if (error.response.status === 400) {
+        userMessage = errorData?.message || 'Invalid request. Check phone number format.';
+      }
+      
+      return res.status(500).json({ 
+        error: userMessage,
+        details: errorData,
+        isDevelopment: true,
+        note: 'Check backend console for detailed error information.'
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: error.message || 'Failed to initiate call',
+      isDevelopment: true,
+      note: 'Unable to connect. Check your configuration and internet connection.'
+    });
   }
 });
 
-// Exotel webhook for inbound calls
-app.post('/exotel/voice', async (req, res) => {
+// Twilio call function with interactive IVR
+async function makeTwilioCall(to, res) {
   try {
-    const from = req.body.From;
-    const to = req.body.To;
-    const speechResult = req.body.SpeechResult || '';
-    const digits = req.body.Digits || '';
-    const callSid = req.body.CallSid || 'unknown';
+    console.log('🔗 Twilio API Configuration:');
+    console.log('   Account SID:', TWILIO_ACCOUNT_SID);
+    console.log('   From Number:', TWILIO_PHONE_NUMBER);
+    console.log('   To Number:', to);
     
-    console.log(`📞 Incoming call from ${from} to ${to}`, { speechResult, digits, callSid });
-
-    // Handle DTMF menu selection
-    if (digits && !speechResult) {
-      let menuResponse = '';
-      let healthCondition = '';
-      
-      switch(digits) {
-        case '1':
-          healthCondition = 'Pregnancy concerns (गर्भावस्था संबंधी चिंता)';
-          menuResponse = 'Please describe your pregnancy symptoms or concerns.';
-          break;
-        case '2':
-          healthCondition = 'Child health issue (बच्चे का स्वास्थ्य)';
-          menuResponse = 'Please tell me about the child\'s symptoms.';
-          break;
-        case '3':
-          healthCondition = 'High fever (तेज बुखार)';
-          menuResponse = 'Please describe the fever symptoms - how long and severity.';
-          break;
-        case '4':
-          healthCondition = 'Emergency situation (आपातकाल)';
-          menuResponse = 'This is an emergency. Please describe the situation quickly.';
-          break;
-        case '9':
-          return res.type('application/xml').send(`
-            <Response>
-              <Say language="hi-IN">Dhanyavaad. Swasthya ke liye GraminSeva ko chunne ke liye. Shukriya.</Say>
-              <Say>Thank you for using GraminSeva Health Services. Goodbye.</Say>
-              <Hangup/>
-            </Response>
-          `);
-        default:
-          menuResponse = 'Invalid selection. Please try again.';
-      }
-      
-      // Log menu selection
-      if (digits !== '9' && healthCondition) {
-        const logData = !supabase || process.env.DEV_MODE === 'true'
-          ? await logCallLocal({ user_phone_number: from, user_transcript: `Menu: ${healthCondition}`, ai_response: menuResponse, is_critical: digits === '4' })
-          : (await supabase.from('call_logs').insert({ user_phone_number: from, user_transcript: `Menu: ${healthCondition}`, ai_response: menuResponse, is_critical: digits === '4' }).select().single()).data;
-        
-        console.log(`📋 Menu selection logged: ${healthCondition}`);
-      }
-      
-      return res.type('application/xml').send(`
-        <Response>
-          <Say language="hi-IN">${menuResponse}</Say>
-          <Gather input="speech" action="/exotel/voice" method="POST" timeout="5" language="hi-IN">
-            <Say>Speak now...</Say>
-          </Gather>
-          <Say>No input received. Goodbye.</Say>
-          <Hangup/>
-        </Response>
-      `);
+    if (!twilioClient) {
+      throw new Error('Twilio client not initialized. Check credentials.');
     }
-
-    // Initial call - present menu if no speech/digits
-    if (!speechResult && !digits) {
-      return res.type('application/xml').send(`
-        <Response>
-          <Say language="hi-IN">Namaste. GraminSeva health assistant mein aapka swagat hai.</Say>
-          <Say>Welcome to GraminSeva Health Assistant.</Say>
-          <Gather numDigits="1" action="/exotel/voice" method="POST" timeout="10">
-            <Say language="hi-IN">
-              Kripya apni samasya ke liye ek option chunein.
-              Garbhavastha ke liye 1 dabaayein.
-              Bacche ki sehat ke liye 2 dabaayein.
-              Bukhar ke liye 3 dabaayein.
-              Aapatkaaleen sthiti ke liye 4 dabaayein.
-              Call khatam karne ke liye 9 dabaayein.
-            </Say>
-            <Say>
-              Press 1 for pregnancy concerns.
-              Press 2 for child health.
-              Press 3 for fever.
-              Press 4 for emergency.
-              Press 9 to end call.
-            </Say>
-          </Gather>
-          <Say>No input received. Goodbye.</Say>
-          <Hangup/>
-        </Response>
-      `);
+    
+    // This function is ONLY for OUTBOUND calls from web interface
+    // Incoming calls to Twilio number are handled by TwiML Bins directly
+    
+    // Simple welcome message for programmatic calls from backend
+    const simpleTwiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Aditi" language="hi-IN">नमस्ते! ग्रामीणसेवा में आपका स्वागत है। आपका कॉल कनेक्ट हो रहा है।</Say>
+  <Say voice="alice" language="en-IN">Hello! Welcome to GraminSeva. Your call is being connected. Thank you!</Say>
+  <Hangup/>
+</Response>`;
+    
+    // Always use simple TwiML for programmatic calls
+    // Interactive IVR is handled by TwiML Bins in Twilio Console
+    const callOptions = {
+      from: TWILIO_PHONE_NUMBER,
+      to: to,
+      twiml: simpleTwiml
+    };
+    
+    console.log('📞 Initiating OUTBOUND call from web interface to:', to);
+    
+    // Create the call using Twilio SDK
+    const call = await twilioClient.calls.create(callOptions);
+    
+    console.log('✅ Twilio call initiated successfully');
+    console.log('   Call SID:', call.sid);
+    console.log('   Status:', call.status);
+    console.log('   Type: Outbound call from web interface');
+    
+    return res.json({
+      message: 'Call initiated successfully via Twilio',
+      isDevelopment: false,
+      phoneNumber: to,
+      callSid: call.sid,
+      status: call.status,
+      service: 'twilio',
+      type: 'outbound-web'
+    });
+  } catch (error) {
+    console.error('❌ Twilio call failed:', error.message);
+    console.error('Error details:', error);
+    
+    // Provide helpful error messages
+    let userMessage = 'Failed to initiate call via Twilio';
+    
+    if (error.code === 21608) {
+      userMessage = 'Invalid phone number format. Please use E.164 format (e.g., +911234567890)';
+    } else if (error.code === 21606) {
+      userMessage = 'The "From" phone number is not a valid Twilio number. Please verify your Twilio phone number.';
+    } else if (error.code === 20003) {
+      userMessage = 'Authentication failed. Please verify your Twilio credentials.';
+    } else if (error.code === 21217) {
+      userMessage = 'Phone number not verified. For trial accounts, verify the number at https://console.twilio.com/us1/develop/phone-numbers/manage/verified';
     }
+    
+    return res.status(500).json({
+      error: userMessage,
+      details: error.message,
+      code: error.code,
+      isDevelopment: true,
+      note: 'Check backend console for detailed error information. Visit https://www.twilio.com/docs/api/errors for error code reference.'
+    });
+  }
+}
 
-    // Process speech input with AI
-    const userTranscript = speechResult;
-    console.log(`🗣️ Speech input: "${userTranscript}"`);
+// Twilio Voice Webhook - Interactive IVR
+app.post('/api/twilio/voice', (req, res) => {
+  try {
+    console.log('📞 Twilio Voice Webhook called');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
+    const twiml = new twilio.twiml.VoiceResponse();
+    const gather = twiml.gather({
+      input: 'dtmf',
+      timeout: 10,
+      numDigits: 1,
+      action: '/api/twilio/gather',
+      method: 'POST'
+    });
 
-    // Call AI to analyze the spoken transcription
-    let completion;
+  // Hindi greeting
+  gather.say(
+    { voice: 'alice', language: 'hi-IN' },
+    'नमस्ते! ग्रामीणसेवा में आपका स्वागत है।'
+  );
+  
+  // English greeting
+  gather.say(
+    { voice: 'alice', language: 'en-IN' },
+    'Hello! Welcome to GraminSeva health service.'
+  );
+  
+  gather.pause({ length: 1 });
+  
+  // Hindi menu
+  gather.say(
+    { voice: 'alice', language: 'hi-IN' },
+    'कृपया सुनें। यदि माँ को कोई स्वास्थ्य समस्या है, तो 1 दबाएं। यदि बच्चे को कोई स्वास्थ्य समस्या है, तो 2 दबाएं। सामान्य स्वास्थ्य सलाह के लिए 3 दबाएं।'
+  );
+  
+  // English menu
+  gather.say(
+    { voice: 'alice', language: 'en-IN' },
+    'Please listen carefully. Press 1 if mother has a health problem. Press 2 if child has a health problem. Press 3 for general health advice.'
+  );
+
+  // If no input received
+  twiml.say(
+    { voice: 'alice', language: 'en-IN' },
+    'We did not receive your input. Please call back. Thank you.'
+  );
+
+  console.log('✅ Sending TwiML response');
+  res.type('text/xml');
+  res.send(twiml.toString());
+  } catch (error) {
+    console.error('❌ Error in /api/twilio/voice:', error);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Sorry, a system error occurred. Please try again later.');
+    twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
+  }
+});
+
+// Twilio Gather Handler - Process user input
+app.post('/api/twilio/gather', async (req, res) => {
+  try {
+    const digit = req.body.Digits;
+    const callSid = req.body.CallSid;
+    const from = req.body.From;
+    const twiml = new twilio.twiml.VoiceResponse();
+
+    console.log(`📞 Received input: ${digit} from ${from}`);
+
+    if (digit === '1') {
+    // Mother's health issue
+    const gather = twiml.gather({
+      input: 'dtmf',
+      timeout: 10,
+      numDigits: 1,
+      action: '/api/twilio/mother-symptoms',
+      method: 'POST'
+    });
+    
+    gather.say({ voice: 'alice', language: 'hi-IN' },
+      'आपने माँ की स्वास्थ्य समस्या चुनी है। कृपया लक्षण चुनें।'
+    );
+    gather.say({ voice: 'alice', language: 'en-IN' },
+      'You selected mother health issue. Please choose symptoms.'
+    );
+    gather.pause({ length: 1 });
+    gather.say({ voice: 'alice', language: 'hi-IN' },
+      'बुखार या संक्रमण के लिए 1 दबाएं। पेट दर्द या उल्टी के लिए 2 दबाएं। चक्कर या कमजोरी के लिए 3 दबाएं। गंभीर रक्तस्राव या दर्द के लिए 9 दबाएं।'
+    );
+    gather.say({ voice: 'alice', language: 'en-IN' },
+      'Press 1 for fever or infection. Press 2 for stomach pain or vomiting. Press 3 for dizziness or weakness. Press 9 for severe bleeding or pain.'
+    );
+  } else if (digit === '2') {
+    // Child's health issue
+    const gather = twiml.gather({
+      input: 'dtmf',
+      timeout: 10,
+      numDigits: 1,
+      action: '/api/twilio/child-symptoms',
+      method: 'POST'
+    });
+    
+    gather.say({ voice: 'alice', language: 'hi-IN' },
+      'आपने बच्चे की स्वास्थ्य समस्या चुनी है। कृपया लक्षण चुनें।'
+    );
+    gather.say({ voice: 'alice', language: 'en-IN' },
+      'You selected child health issue. Please choose symptoms.'
+    );
+    gather.pause({ length: 1 });
+    gather.say({ voice: 'alice', language: 'hi-IN' },
+      'बुखार या खांसी के लिए 1 दबाएं। दस्त या उल्टी के लिए 2 दबाएं। भूख न लगना के लिए 3 दबाएं। सांस लेने में तकलीफ या गंभीर बीमारी के लिए 9 दबाएं।'
+    );
+    gather.say({ voice: 'alice', language: 'en-IN' },
+      'Press 1 for fever or cough. Press 2 for diarrhea or vomiting. Press 3 for loss of appetite. Press 9 for breathing difficulty or severe illness.'
+    );
+  } else if (digit === '3') {
+    // General health advice
+    twiml.say({ voice: 'alice', language: 'hi-IN' },
+      'सामान्य स्वास्थ्य सलाह।'
+    );
+    twiml.say({ voice: 'alice', language: 'en-IN' },
+      'For general health advice, please maintain hygiene, drink clean water, ensure vaccination, eat nutritious food, and visit health center for regular checkups.'
+    );
+    twiml.say({ voice: 'alice', language: 'hi-IN' },
+      'धन्यवाद। स्वस्थ रहें।'
+    );
+    
+    // Log non-critical call
+    await logCall(from, 'general_advice', 'completed', false);
+  } else {
+    twiml.say({ voice: 'alice', language: 'en-IN' },
+      'Invalid input. Please call back and try again.'
+    );
+  }
+
+  res.type('text/xml');
+  res.send(twiml.toString());
+  } catch (error) {
+    console.error('❌ Twilio gather error:', error);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Sorry, an error occurred. Please call back.');
+    twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
+  }
+});
+
+// Mother symptoms handler - Dynamic AI-based responses
+app.post('/api/twilio/mother-symptoms', async (req, res) => {
+  try {
+    const digit = req.body.Digits;
+    const from = req.body.From;
+    const twiml = new twilio.twiml.VoiceResponse();
+    
+    // Map digit to health issue with detailed context
+    const symptomMap = {
+      '1': 'A mother (adult woman) is calling about fever or infection. She needs detailed advice on: what to do at home, when to take medicine, how to monitor temperature, when to visit doctor, and what are warning signs. Provide practical step-by-step guidance in simple Hindi/English.',
+      '2': 'A mother (adult woman) has stomach pain or vomiting. She needs advice on: what to eat/avoid, home remedies like ORS, how to manage pain, when to seek medical help, and warning signs for serious conditions. Give specific actionable steps.',
+      '3': 'A mother (adult woman) has dizziness or weakness. She may have low blood pressure, anemia, or dehydration. Advise on: immediate steps to take, foods to eat (iron-rich), rest positions, when to see doctor. Include specific remedies.',
+      '9': 'CRITICAL EMERGENCY: A mother has severe bleeding or severe pain. This requires IMMEDIATE medical attention. Tell her to go to hospital RIGHT NOW.'
+    };
+    
+    const symptomDescription = symptomMap[digit] || 'Unknown symptom';
+    console.log(`🏥 Mother health query (digit ${digit}): Requesting detailed AI advice`);
+    
+    // Get AI-generated advice
+    let aiResponse;
     try {
-      completion = await callAI(userTranscript, { messages: [ { role: 'system', content: systemPrompt + '\nRespond in the same language as the user.' }, { role: 'user', content: userTranscript } ] });
+      const completion = await callAI(symptomDescription, { response_format: { type: 'json_object' } });
+      aiResponse = JSON.parse(completion.choices[0].message.content);
     } catch (err) {
-      const msg = err && (err.message || err.toString()) || '';
-      console.warn('OpenAI call failed (fallback) in Exotel flow:', msg);
-      if ((err && (err.status === 429 || err.statusCode === 429)) || /quota|429|rate limit/i.test(msg)) {
-        const lang = detectLanguage(userTranscript);
-        const fallbackText = lang === 'hi'
-          ? 'Agar lakshan bigadte hain to turant chikitsak se sampark karein. Kripya kareeb ke swasthya kendra ya aspataal mein jayein.'
-          : 'Please seek medical attention if symptoms worsen. Visit the nearest health center or call for help.';
-        completion = {
-          choices: [{ message: { content: JSON.stringify({ is_critical: false, first_aid_advice: fallbackText, hospital_referral: '' }) } }]
-        };
-      } else {
-        throw err;
-      }
-    }
-
-    // Try to parse JSON response from model; fall back if not JSON
-    let aiJsonResponse;
-    try {
-      aiJsonResponse = JSON.parse(completion.choices[0].message.content);
-    } catch (e) {
-      console.warn('AI did not return strict JSON in Exotel flow, falling back to plain text.', e && e.stack ? e.stack : e);
-      aiJsonResponse = {
-        is_critical: false,
-        first_aid_advice: (completion.choices[0].message.content || '').toString().substring(0, 400),
-        hospital_referral: '',
+      console.error('AI call failed, using fallback:', err.message);
+      // Fallback for critical cases
+      aiResponse = {
+        is_critical: digit === '9',
+        first_aid_advice: digit === '9' 
+          ? 'This is an emergency. Please go to the nearest health center immediately.'
+          : 'Please rest and stay hydrated. If symptoms worsen, visit a health center.',
+        hospital_referral: digit === '9' ? 'Visit emergency room immediately' : ''
       };
     }
+    
+    const { is_critical, first_aid_advice, hospital_referral } = aiResponse;
+    const advice = first_aid_advice + (hospital_referral ? ' ' + hospital_referral : '');
+    const isCritical = is_critical || digit === '9';
 
-    const { is_critical, first_aid_advice, hospital_referral } = aiJsonResponse;
-    const replyText = `${first_aid_advice} ${hospital_referral || ''}`.trim();
-    const lang = detectLanguage(userTranscript);
-
-    console.log(`🤖 AI Response (critical: ${is_critical}): "${replyText.substring(0, 100)}..."`);
-
-    // Log the call (Supabase in prod, local JSON in DEV_MODE or if Supabase unavailable)
-    try {
-      let logData;
-      if (!supabase || process.env.DEV_MODE === 'true') {
-        logData = await logCallLocal({ user_phone_number: from, user_transcript: userTranscript, ai_response: replyText, is_critical: !!is_critical });
-      } else {
-        const { data: _logData, error: _logErr } = await supabase
-          .from('call_logs')
-          .insert({ user_phone_number: from, user_transcript: userTranscript, ai_response: replyText, is_critical: !!is_critical })
-          .select()
-          .single();
-        if (_logErr) console.warn('Supabase log error (exotel):', _logErr);
-        logData = _logData;
-      }
-
-      console.log(`💾 Call logged to database (ID: ${logData?.id})`);
-
-      // If critical, create referral and attempt to transfer
-      if (is_critical) {
-        const nearestCenter = healthcareCenters[Math.floor(Math.random() * healthcareCenters.length)];
-        try {
-          if (!supabase || process.env.DEV_MODE === 'true') {
-            await createReferralLocal({ call_id: logData?.id || null, patient_phone: from, symptoms_summary: userTranscript, referred_to_hospital: nearestCenter.name, hospital_phone: nearestCenter.phone, critical_level: 'Emergency' });
-          } else {
-            const { error: referralErr } = await supabase.from('referrals').insert({
-              call_id: logData?.id || null,
-              patient_phone: from,
-              symptoms_summary: userTranscript,
-              referred_to_hospital: nearestCenter.name,
-              hospital_phone: nearestCenter.phone,
-              critical_level: 'Emergency',
-            });
-            if (referralErr) console.warn('Referral logging error (exotel):', referralErr);
-          }
-          console.log(`🏥 Referral created: ${nearestCenter.name}`);
-        } catch (e) {
-          console.warn('Referral insert failed (exotel):', e && e.stack ? e.stack : e);
-        }
-
-        // Respond with Exotel XML to transfer call
-        return res.type('application/xml').send(`
-          <Response>
-            <Say language="hi-IN">${first_aid_advice}</Say>
-            <Say language="hi-IN">Aapko ${nearestCenter.name} se connect kar rahe hain. Kripya prateeksha karein.</Say>
-            <Say>Connecting you to ${nearestCenter.name}. Please wait.</Say>
-            <Dial>${nearestCenter.phone}</Dial>
-            <Say>Unable to connect. Please call ${nearestCenter.phone} directly.</Say>
-          </Response>
-        `);
-      }
-
-      // Non-critical: respond with advice and offer to gather more information
-      return res.type('application/xml').send(`
-        <Response>
-          <Say language="hi-IN">${replyText}</Say>
-          <Gather input="speech dtmf" numDigits="1" action="/exotel/voice" method="POST" timeout="5" language="hi-IN">
-            <Say language="hi-IN">Kya aur madad chahiye? Haan ke liye 1 dabaayein, nahi ke liye 9 dabaayein. Ya aap apna sawaal bol sakte hain.</Say>
-            <Say>Need more help? Press 1 for yes, 9 for no. Or speak your question.</Say>
-          </Gather>
-          <Say language="hi-IN">Dhanyavaad. Swasthya ke liye GraminSeva ko yaad rakhein.</Say>
-          <Say>Thank you for using GraminSeva Health Services.</Say>
-          <Hangup/>
-        </Response>
-      `);
-    } catch (logErr) {
-      console.error('Exotel voice handling log error:', logErr && logErr.stack ? logErr.stack : logErr);
-      return res.type('application/xml').send('<Response><Say>Sorry, an error occurred while processing your call. Please try again later.</Say></Response>');
+    // Speak the AI-generated advice
+    twiml.say({ voice: 'alice', language: 'en-IN' }, advice);
+    twiml.pause({ length: 1 });
+    
+    if (isCritical) {
+      twiml.say({ voice: 'alice', language: 'hi-IN' }, 'कृपया तुरंत स्वास्थ्य केंद्र जाएं।');
+      twiml.say({ voice: 'alice', language: 'en-IN' }, 'Please go to health center immediately.');
     }
+    
+    twiml.say({ voice: 'alice', language: 'hi-IN' }, 'धन्यवाद। स्वस्थ रहें।');
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Thank you for calling GraminSeva. Take care.');
+
+    // Log the call
+    await logCall(from, `mother_symptom_${digit}`, advice, isCritical);
+
+    res.type('text/xml');
+    res.send(twiml.toString());
   } catch (error) {
-    console.error('Exotel voice flow error:', error && error.stack ? error.stack : error);
-    return res.type('application/xml').send('<Response><Say>Sorry, something went wrong. Please try again later.</Say></Response>');
+    console.error('❌ Mother symptoms error:', error);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Sorry, an error occurred. Please call back.');
+    twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
   }
 });
 
-// Function to make outbound call via Exotel
-async function makeExotelCall(from, to) {
-  const url = `https://${EXOTEL_API_KEY}:${EXOTEL_API_TOKEN}@${EXOTEL_SUBDOMAIN}/v1/Accounts/${EXOTEL_SID}/Calls/connect`;
-  const data = {
-    From: from,
-    To: to,
-    CallerId: to,
-    CallType: 'trans',
-  };
-  return axios.post(url, data);
+// Child symptoms handler - Dynamic AI-based responses
+app.post('/api/twilio/child-symptoms', async (req, res) => {
+  try {
+    const digit = req.body.Digits;
+    const from = req.body.From;
+    const twiml = new twilio.twiml.VoiceResponse();
+    
+    // Map digit to health issue with detailed context
+    const symptomMap = {
+      '1': 'A parent is calling about their child who has fever or cough. The parent needs detailed guidance on: how to reduce fever at home, what temperature is dangerous, what fluids to give, how to help with cough, when to give medicine (paracetamol), and when to rush to doctor. Provide age-appropriate, practical steps in simple language.',
+      '2': 'A parent\'s child has diarrhea or vomiting. This can be serious for children (dehydration risk). Advise on: giving ORS solution frequently, what foods to give/avoid, signs of dehydration (dry mouth, no tears, no urine), when it becomes critical. Give specific, life-saving instructions.',
+      '3': 'A child has loss of appetite or not eating well. Parents are worried. Advise on: how to encourage eating, what nutritious foods to offer, small frequent meals, when this becomes serious, signs of malnutrition or illness. Provide practical feeding tips.',
+      '9': 'CRITICAL CHILD EMERGENCY: A child has breathing difficulty, severe illness, or life-threatening symptoms. Tell parents to RUSH TO HOSPITAL IMMEDIATELY. This is extremely urgent. Child\'s life may be at risk.'
+    };
+    
+    const symptomDescription = symptomMap[digit] || 'Unknown symptom';
+    console.log(`👶 Child health query (digit ${digit}): Requesting detailed AI advice`);
+    
+    // Get AI-generated advice
+    let aiResponse;
+    try {
+      const completion = await callAI(symptomDescription, { response_format: { type: 'json_object' } });
+      aiResponse = JSON.parse(completion.choices[0].message.content);
+    } catch (err) {
+      console.error('AI call failed, using fallback:', err.message);
+      // Fallback for critical cases
+      aiResponse = {
+        is_critical: digit === '9' || digit === '2',
+        first_aid_advice: digit === '9'
+          ? 'Child breathing difficulty is critical! Rush to hospital immediately.'
+          : 'Keep child comfortable and hydrated. Monitor symptoms closely.',
+        hospital_referral: (digit === '9' || digit === '2') ? 'Visit hospital if symptoms worsen' : ''
+      };
+    }
+    
+    const { is_critical, first_aid_advice, hospital_referral } = aiResponse;
+    const advice = first_aid_advice + (hospital_referral ? ' ' + hospital_referral : '');
+    const isCritical = is_critical || digit === '9' || digit === '2';
+
+    // Speak the AI-generated advice
+    twiml.say({ voice: 'alice', language: 'en-IN' }, advice);
+    twiml.pause({ length: 1 });
+    
+    if (isCritical) {
+      twiml.say({ voice: 'alice', language: 'hi-IN' }, 'यह गंभीर है। तुरंत डॉक्टर से मिलें।');
+      twiml.say({ voice: 'alice', language: 'en-IN' }, 'This is serious. See doctor immediately.');
+    }
+    
+    twiml.say({ voice: 'alice', language: 'hi-IN' }, 'धन्यवाद। स्वस्थ रहें।');
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Thank you for calling GraminSeva. Take care.');
+
+    // Log the call
+    await logCall(from, `child_symptom_${digit}`, advice, isCritical);
+
+    res.type('text/xml');
+    res.send(twiml.toString());
+  } catch (error) {
+    console.error('❌ Child symptoms error:', error);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say({ voice: 'alice', language: 'en-IN' }, 'Sorry, an error occurred. Please call back.');
+    twiml.hangup();
+    res.type('text/xml');
+    res.send(twiml.toString());
+  }
+});
+
+// Twilio Status Callback
+app.post('/api/twilio/status', (req, res) => {
+  const { CallSid, CallStatus, From, To } = req.body;
+  console.log(`📞 Call ${CallSid} status: ${CallStatus} (${From} -> ${To})`);
+  res.sendStatus(200);
+});
+
+// Helper function to log calls
+async function logCall(phoneNumber, issueType, advice, isCritical) {
+  try {
+    const callLog = {
+      id: Date.now().toString(),
+      phoneNumber: phoneNumber,
+      timestamp: new Date().toISOString(),
+      issueType: issueType,
+      advice: advice,
+      isCritical: isCritical,
+      status: 'completed'
+    };
+
+    if (supabase) {
+      await supabase.from('calls').insert([callLog]);
+    } else {
+      // Local storage fallback
+      const calls = readJsonFile(CALLS_FILE);
+      calls.push(callLog);
+      writeJsonFile(CALLS_FILE, calls);
+    }
+
+    // If critical, create referral
+    if (isCritical) {
+      const referral = {
+        id: Date.now().toString(),
+        callId: callLog.id,
+        phoneNumber: phoneNumber,
+        issueType: issueType,
+        severity: 'critical',
+        status: 'pending',
+        assignedCenter: HEALTHCARE_CENTERS[0]?.name || 'Nearest Health Center',
+        createdAt: new Date().toISOString()
+      };
+
+      if (supabase) {
+        await supabase.from('referrals').insert([referral]);
+      } else {
+        const referrals = readJsonFile(REFERRALS_FILE);
+        referrals.push(referral);
+        writeJsonFile(REFERRALS_FILE, referrals);
+      }
+
+      console.log('🚨 Critical case logged - Referral created:', referral);
+    }
+
+    console.log('✅ Call logged successfully:', callLog);
+  } catch (error) {
+    console.error('❌ Error logging call:', error);
+  }
 }
 
 // Final error handler (catches errors passed with next(err))
