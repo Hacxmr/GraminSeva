@@ -39,7 +39,7 @@ Empower rural communities with instant access to healthcare information in their
 │   (Next.js)       │◄───────►│   (Express.js)    │◄───────►│   SERVICES       │
 └───────────────────┘         └───────────────────┘         └──────────────────┘
 │                             │                             │
-│  • Web Interface            │  • REST API                 │  • OpenAI GPT-4
+│  • Web Interface            │  • REST API                 │  • Google Gemini
 │  • Chat UI                  │  • IVR System               │  • Twilio API
 │  • Voice Synthesis          │  • Call Management          │  • Supabase DB
 │  • Language Toggle          │  • Health Logic             │  
@@ -58,7 +58,7 @@ Empower rural communities with instant access to healthcare information in their
 
 #### Backend (Port 5001)
 - **Framework**: Express.js
-- **AI Engine**: OpenAI GPT-4-mini
+- **AI Engine**: Google Gemini 1.5 Flash
 - **Telephony**: Twilio Voice API
 - **Database**: Supabase (PostgreSQL) with local JSON fallback
 
@@ -282,7 +282,7 @@ Success: Green (#22c55e)
 {
   "framework": "Express.js",
   "language": "JavaScript (Node.js 20)",
-  "ai": "OpenAI GPT-4-mini",
+  "ai": "Google Gemini 1.5 Flash",
   "telephony": "Twilio Voice API",
   "database": "Supabase (PostgreSQL)",
   "storage": "Local JSON (fallback)",
@@ -294,14 +294,14 @@ Success: Green (#22c55e)
 ```json
 {
   "ai": {
-    "provider": "OpenAI",
-    "model": "gpt-4-mini",
+    "provider": "Google AI",
+    "model": "gemini-1.5-flash",
     "purpose": "Health advice generation"
   },
   "telephony": {
     "provider": "Twilio",
     "service": "Voice API + TwiML",
-    "number": "+1 (952) 299-0705",
+    "number": "+1-XXX-XXX-XXXX (Configured)",
     "features": ["IVR", "Call Recording", "Status Callbacks"]
   },
   "database": {
@@ -342,8 +342,8 @@ Success: Green (#22c55e)
         │                     │                     │
         ▼                     ▼                     ▼
 ┌──────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   OpenAI     │    │  Twilio Voice    │    │   Supabase      │
-│   GPT-4      │    │  (IVR System)    │    │   Database      │
+│ Google       │    │  Twilio Voice    │    │   Supabase      │
+│ Gemini 1.5   │    │  (IVR System)    │    │   Database      │
 │              │    │                  │    │                 │
 │ • Chat       │    │ • Call Handling  │    │ • Calls         │
 │ • Health     │    │ • TwiML Response │    │ • Referrals     │
@@ -516,14 +516,14 @@ Content-Type: application/json
 
 Request:
 {
-  "phoneNumber": "+911234567890"
+  "phoneNumber": "+91XXXXXXXXXX"
 }
 
 Response (Success):
 {
   "message": "Call initiated successfully via Twilio",
   "isDevelopment": false,
-  "phoneNumber": "+911234567890",
+  "phoneNumber": "+91XXXXXXXXXX",
   "callSid": "CAxxxxxxxxxxxx",
   "status": "queued",
   "service": "twilio"
@@ -533,7 +533,7 @@ Response (Development Mode):
 {
   "message": "Call simulation successful",
   "isDevelopment": true,
-  "phoneNumber": "+911234567890",
+  "phoneNumber": "+91XXXXXXXXXX",
   "note": "Configure Twilio credentials to enable real calls"
 }
 ```
@@ -546,7 +546,7 @@ Response:
 [
   {
     "id": "1732269600000",
-    "phoneNumber": "+911234567890",
+    "phoneNumber": "+91XXXXXXXXXX",
     "timestamp": "2025-11-22T10:00:00.000Z",
     "issueType": "mother_symptom_9",
     "advice": "This is a critical emergency...",
@@ -599,8 +599,8 @@ Content-Type: application/x-www-form-urlencoded
 Body Parameters:
 - Digits: "1" | "2" | "3"
 - CallSid: "CAxxxxxxxxxxxx"
-- From: "+911234567890"
-- To: "+19522990705"
+- From: "+91XXXXXXXXXX"
+- To: "+1XXXXXXXXXX"
 
 Response: (TwiML XML with submenu)
 ```
@@ -613,8 +613,8 @@ Content-Type: application/x-www-form-urlencoded
 Body Parameters:
 - CallSid: "CAxxxxxxxxxxxx"
 - CallStatus: "initiated" | "ringing" | "answered" | "completed"
-- From: "+911234567890"
-- To: "+19522990705"
+- From: "+91XXXXXXXXXX"
+- To: "+1XXXXXXXXXX"
 - Duration: "120" (seconds)
 
 Response: 200 OK
@@ -687,7 +687,7 @@ CREATE TABLE health_centers (
 [
   {
     "id": "1732269600000",
-    "phoneNumber": "+911234567890",
+    "phoneNumber": "+91XXXXXXXXXX",
     "timestamp": "2025-11-22T10:00:00.000Z",
     "issueType": "child_symptom_9",
     "advice": "Critical emergency for child! Breathing difficulty...",
@@ -703,11 +703,11 @@ CREATE TABLE health_centers (
   {
     "id": "1732269600001",
     "callId": "1732269600000",
-    "phoneNumber": "+911234567890",
+    "phoneNumber": "+91XXXXXXXXXX",
     "issueType": "child_breathing_difficulty",
     "severity": "critical",
     "status": "pending",
-    "assignedCenter": "Sardar Hospital",
+    "assignedCenter": "Local Hospital",
     "createdAt": "2025-11-22T10:00:00.000Z"
   }
 ]
@@ -725,48 +725,45 @@ CREATE TABLE health_centers (
 - Git
 
 # Required Accounts
-- OpenAI API account (GPT-4 access)
+- Google AI Studio account (free tier available)
+  Get API key: https://aistudio.google.com/apikey
 - Twilio account (with phone number)
-- Supabase project (optional, has fallback)
+- Supabase project (optional, has local JSON fallback)
 ```
 
 ### Environment Configuration
 
 #### Backend `.env`
 ```env
-# OpenAI Configuration
-OPENAI_API_KEY=sk-proj-xxxxx
+# Google AI Configuration (REQUIRED)
+GOOGLE_AI_API_KEY=your_google_gemini_api_key_here
+# Get your API key from: https://aistudio.google.com/apikey
 
-# Supabase Configuration (Optional)
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+# Supabase Configuration (Optional - has local JSON fallback)
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
 
-# Twilio Configuration
-TWILIO_ACCOUNT_SID=AC430c53c6de5967840ded678ef72c5b29
-TWILIO_AUTH_TOKEN=5ce4e2c0670f8c32ebc2fc1f150bfbac
-TWILIO_PHONE_NUMBER=+19522990705
+# Twilio Configuration (REQUIRED for IVR)
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=your_twilio_phone_number
 CALL_SERVICE=twilio
-
-# Exotel Configuration (Backup)
-EXOTEL_SID=startup111
-EXOTEL_PHONE_NUMBER=09513885656
-EXOTEL_API_KEY=xxxxx
-EXOTEL_API_TOKEN=xxxxx
-EXOTEL_SUBDOMAIN=api.exotel.com
 
 # Server Configuration
 PORT=5001
 DEV_MODE=false
-HEALTHCARE_CENTERS=Sardar Hospital:+919999999999,City Medical Center:+918888888888
+HEALTHCARE_CENTERS=Hospital Name:+91XXXXXXXXXX,Clinic Name:+91XXXXXXXXXX
 
-# Ngrok (for testing IVR locally)
-NGROK_URL=https://xxxxx.ngrok.io
+# Ngrok (for testing IVR locally - optional)
+NGROK_URL=https://xxxxx.ngrok-free.app
 ```
 
 #### Frontend `.env.local`
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_BACKEND_URL=http://localhost:5001
 ```
 
 ### Installation Steps
@@ -846,7 +843,7 @@ npm start
 
 ### Current Capabilities
 - **Concurrent Users**: 100+ (frontend)
-- **API Response Time**: ~2-5 seconds (OpenAI dependent)
+- **API Response Time**: ~1-2 seconds (Google Gemini)
 - **Voice Synthesis**: <1 second (browser native)
 - **IVR Latency**: ~3-5 seconds (Twilio processing)
 - **Database Queries**: <100ms (Supabase)
@@ -883,13 +880,10 @@ npm start
 
 ### For Technical Issues
 - **Repository**: https://github.com/Hacxmr/GraminSeva
-- **Branch**: hackathon-demo
+- **Branch**: main
 
 ### Documentation Files
-- `README.md` - Quick start guide
-- `IVR_SYSTEM.md` - IVR detailed documentation
-- `TWILIO_SETUP.md` - Twilio configuration guide
-- `QUICKSTART.md` - Launch instructions
+- `README.md` - Quick start guide with setup instructions
 - `DOCUMENTATION.md` - This comprehensive guide
 
 ---
