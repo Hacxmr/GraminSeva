@@ -21,11 +21,12 @@ GraminSeva is an AI-powered health assistant designed to provide accessible heal
 - 🔒 **No Backend Required**: Uses TwiML Bins for reliability
 
 ### 2. **AI-Powered Chat Interface**
-- 🤖 **Google Gemini AI Integration**: Dynamic, context-aware health responses
+- 🤖 **Google Gemini 1.5 Flash**: Advanced AI for dynamic health responses
 - 💬 **Multi-language Support**: English and Hindi
 - 📚 **Extensive Knowledge Base**: Pre-trained on rural health scenarios
 - 🎨 **Modern UI**: Built with Next.js and Tailwind CSS
 - 📱 **Responsive Design**: Works on desktop and mobile devices
+- ⚡ **Fast Responses**: Sub-2 second AI generation
 
 ### 3. **Dashboard & Analytics**
 - 📊 **Call Logs**: Track all incoming and outgoing calls
@@ -58,8 +59,10 @@ GraminSeva/
 - **Node.js** v18+ 
 - **npm** or **pnpm**
 - **Twilio Account** (with phone number)
-- **Google AI API Key** (Gemini)
+- **Google AI Studio API Key** (for Gemini 1.5 Flash)
 - **Supabase Account** (optional, for database)
+
+> **Note**: Get your free Google AI API key at [Google AI Studio](https://aistudio.google.com/apikey)
 
 ### Installation
 
@@ -84,16 +87,16 @@ GraminSeva/
 
    Create `backend/.env`:
    ```env
-   # Google AI
-   GOOGLE_AI_API_KEY=your_google_ai_api_key
+   # Google AI (REQUIRED - Get from https://aistudio.google.com/apikey)
+   GOOGLE_AI_API_KEY=your_google_gemini_api_key
 
-   # Twilio
+   # Twilio (REQUIRED)
    TWILIO_ACCOUNT_SID=your_account_sid
    TWILIO_AUTH_TOKEN=your_auth_token
    TWILIO_PHONE_NUMBER=+1XXXXXXXXXX
    CALL_SERVICE=twilio
 
-   # Supabase
+   # Supabase (Optional - for call logs)
    SUPABASE_URL=your_supabase_url
    SUPABASE_ANON_KEY=your_supabase_key
 
@@ -101,6 +104,8 @@ GraminSeva/
    PORT=5001
    DEV_MODE=false
    ```
+
+   > ⚠️ **Important**: This project uses **Google Gemini AI**, not OpenAI/GPT. Do not use `OPENAI_API_KEY`.
 
 4. **Start the application**
    ```bash
@@ -145,31 +150,45 @@ GraminSeva/
    - You should hear Hindi health advice immediately
    - Call duration: ~90 seconds
 
-## 🤖 Google AI Integration
+## 🤖 Google Gemini AI Integration
 
-The system uses Google Gemini 1.5 Flash for intelligent health responses:
+The system uses **Google Gemini 1.5 Flash** (NOT OpenAI GPT) for intelligent health responses:
 
 ```javascript
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY);
+
 const model = genAI.getGenerativeModel({ 
   model: "gemini-1.5-flash",
-  systemInstruction: `You are GraminSeva Health Assistant...`
+  systemInstruction: `You are GraminSeva Health Assistant...
+    Provide accurate, culturally sensitive health information for rural India.
+    Respond in simple language. Detect emergencies and advise 108 calls.`
 });
 ```
 
+**Why Gemini over GPT:**
+- ✅ Free tier available (60 requests/minute)
+- ✅ Better Hindi language understanding
+- ✅ Lower latency for Indian users
+- ✅ Multimodal capabilities (future expansion)
+- ✅ No credit card required for API access
+
 **Key Features:**
-- Context-aware responses
-- Rural health focus
-- Emergency detection
-- Multi-language support
+- Context-aware health responses
+- Rural health scenario expertise
+- Emergency situation detection
+- Multi-language support (Hindi/English)
+- Fast response times (<2 seconds)
 
 ## 🛠️ Technology Stack
 
 ### Backend
 - **Express.js** - REST API server
 - **Twilio SDK** - Voice calls and SMS
-- **Google Generative AI** - AI-powered responses
-- **Supabase** - PostgreSQL database
+- **@google/generative-ai** - Google Gemini 1.5 Flash API
+- **Supabase** - PostgreSQL database (call logs)
 - **CORS** - Cross-origin support
+- **Body Parser** - JSON request handling
 
 ### Frontend
 - **Next.js 16** - React framework
@@ -213,6 +232,7 @@ const model = genAI.getGenerativeModel({
 #### Removed
 - ❌ ngrok dependency (not needed for TwiML Bins)
 - ❌ Exotel integration (simplified to Twilio only)
+- ❌ OpenAI/GPT integration (switched to Google Gemini)
 - ❌ Hardcoded health responses (replaced with AI)
 - ❌ Complex webhook routing (TwiML Bins handle it)
 
@@ -247,8 +267,14 @@ const model = genAI.getGenerativeModel({
 ### Backend Issues
 
 **Problem**: AI responses not working
-- **Solution**: Verify `GOOGLE_AI_API_KEY` in `.env`
-- Check API quota and billing
+- **Solution**: Verify `GOOGLE_AI_API_KEY` in `backend/.env`
+- Get API key from https://aistudio.google.com/apikey
+- Check API quota (free tier: 60 requests/minute)
+- Ensure using `gemini-1.5-flash` model (not GPT models)
+
+**Problem**: "OpenAI API key not found" error
+- **Solution**: This project does NOT use OpenAI. Remove any `OPENAI_API_KEY` variables
+- Use `GOOGLE_AI_API_KEY` instead with Google Gemini
 
 **Problem**: Database connection failed
 - **Solution**: Verify Supabase credentials
