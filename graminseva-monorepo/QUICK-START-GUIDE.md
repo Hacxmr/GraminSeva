@@ -138,13 +138,13 @@ npm run dev
 GOOGLE_AI_API_KEY=AIzaSyBwB7oly0R8S7ISd5ik9kDhaYaJXSs_3pU
 
 # Database
-SUPABASE_URL=https://apubdmpefyqesqcqohgi.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_anon_key
 
 # Twilio (Phone Calls)
-TWILIO_ACCOUNT_SID=AC430c53c6de5967840ded678ef72c5b29
-TWILIO_AUTH_TOKEN=5ce4e2c0670f8c32ebc2fc1f150bfbac
-TWILIO_PHONE_NUMBER=+19522990705
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_PHONE_NUMBER=+1XXXXXXXXXX
 
 # Server
 PORT=5001

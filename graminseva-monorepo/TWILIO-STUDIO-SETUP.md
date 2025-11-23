@@ -164,7 +164,7 @@ If the above is too complex, here's a **minimal working version**:
 ### Step 4: Connect to Phone Number
 
 1. Go to: **https://console.twilio.com/us1/develop/phone-numbers/manage/incoming**
-2. Click on your phone number: **+19522990705**
+2. Click on your Twilio phone number
 3. Scroll to **"Voice & Fax"** section
 4. Under **"A CALL COMES IN"**:
    - Change from "Webhook" to **"Studio Flow"**
@@ -175,7 +175,7 @@ If the above is too complex, here's a **minimal working version**:
 
 ## ✅ Test Your IVR
 
-1. Call your Twilio number: **+1 952-299-0705**
+1. Call your Twilio number
 2. You should hear the welcome message
 3. Press 1 or 2
 4. Hear the submenu
@@ -332,8 +332,7 @@ After setup:
 - Phone Numbers: https://console.twilio.com/us1/develop/phone-numbers/manage/incoming
 - Call Logs: https://console.twilio.com/us1/monitor/logs/calls
 
-**Your Twilio Number:** +1 952-299-0705
-**Account SID:** AC430c53c6de5967840ded678ef72c5b29
+**Your Twilio Credentials:** Configure in backend/.env file
 
 ---
 

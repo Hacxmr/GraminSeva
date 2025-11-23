@@ -54,8 +54,8 @@
 ## Current Configuration
 
 Your Twilio account:
-- **Account SID:** AC430c53c6de5967840ded678ef72c5b29
-- **Auth Token:** Configured ✅
+- **Account SID:** (Configure in .env file)
+- **Auth Token:** (Configure in .env file)
 - **Phone Number:** ⚠️ NEEDS TO BE SET (currently placeholder)
 
 ## Testing
@@ -65,7 +65,7 @@ Once you've added your Twilio phone number:
 1. **Backend logs will show:**
    ```
    🔗 Twilio API Configuration:
-      Account SID: AC430c53c6de5967840ded678ef72c5b29
+      Account SID: ACxxxxxxxxxxxx
       From Number: +YOUR_TWILIO_NUMBER
       To Number: +USER_PHONE_NUMBER
    ✅ Twilio call initiated successfully
