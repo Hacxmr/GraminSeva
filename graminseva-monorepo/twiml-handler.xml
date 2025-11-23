@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Aditi" language="hi-IN">
+        Maa ki swasthya ke liye: Bukhar hone par aaram karein aur paryapt paani piyein. Pet dard hone par halka bhojan lein. Kamzori mehsoos ho toh poshtik aahar lein. Agar lakshan do din se zyada rahein ya gambhir hain toh turant doctor se milein. Swasth rahein, dhanyavaad!
+    </Say>
+    <Hangup/>
+</Response>
