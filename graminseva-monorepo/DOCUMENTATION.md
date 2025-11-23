@@ -741,11 +741,7 @@ OPENAI_API_KEY=sk-proj-xxxxx
 SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
-# Twilio Configuration
-TWILIO_ACCOUNT_SID=AC430c53c6de5967840ded678ef72c5b29
-TWILIO_AUTH_TOKEN=5ce4e2c0670f8c32ebc2fc1f150bfbac
-TWILIO_PHONE_NUMBER=+19522990705
-CALL_SERVICE=twilio
+
 
 # Exotel Configuration (Backup)
 EXOTEL_SID=startup111
